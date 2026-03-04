@@ -64,19 +64,27 @@ SQL: SELECT loja, SUM(venda_reais) as total_venda FROM Dados_MVP_klk WHERE depar
 
 Exemplo 3 (Busca Inteligente por Palavras-Chave):
 Pergunta: "Qual o estoque do Bone Frase Talento?"
-SQL: SELECT ref_marca_tipo, estoque, loja FROM Dados_MVP_klk WHERE ref_marca_tipo LIKE '%BONE%' AND ref_marca_tipo LIKE '%FRASE%' AND ref_marca_tipo LIKE '%TALENTO%' LIMIT 10;
+SQL: SELECT ref_marca_tipo, estoque, loja FROM Dados_MVP_klk WHERE LOWER(ref_marca_tipo) LIKE '%bone%' AND LOWER(ref_marca_tipo) LIKE '%frase%' AND LOWER(ref_marca_tipo) LIKE '%talento%' LIMIT 10;
 
 Exemplo 4:
 Pergunta: "Tem aquele bone da nike no estoque?"
-SQL: SELECT ref_marca_tipo, estoque, loja FROM Dados_MVP_klk WHERE (ref_marca_tipo LIKE '%BONE%' OR tipo LIKE '%BONE%') AND marca LIKE '%NIKE%' AND estoque > 0 LIMIT 10;
+SQL: SELECT ref_marca_tipo, estoque, loja FROM Dados_MVP_klk WHERE (LOWER(ref_marca_tipo) LIKE '%bone%' OR LOWER(tipo) LIKE '%bone%') AND LOWER(marca) LIKE '%nike%' AND estoque > 0 LIMIT 10;
 
 Exemplo 5:
 Pergunta: "Quais são os próximos eventos?"
 SQL: SELECT e.nome_evento, c.data_evento, e.descricao FROM calendario_eventos c JOIN eventos e ON c.id_evento = e.id_evento WHERE c.data_evento >= CURDATE() ORDER BY c.data_evento ASC LIMIT 3;
 
-Exemplo 6 (O Pulo do Gato: Produtos + Próximo Evento na mesma resposta):
+Exemplo 6:
 Pergunta: "O que preciso comprar urgente considerando a sazonalidade?"
 SQL: SELECT d.ref_marca_tipo, d.estoque, d.sugestao_de_compra, (SELECT e.nome_evento FROM calendario_eventos c JOIN eventos e ON c.id_evento = e.id_evento WHERE c.data_evento >= CURDATE() ORDER BY c.data_evento ASC LIMIT 1) as proximo_evento_sazonal FROM Dados_MVP_klk d WHERE d.sugestao_de_compra > 0 ORDER BY d.sugestao_de_compra DESC LIMIT 10;
+
+Exemplo 7 (Lógica de Alocação Bruta):
+Pergunta: "Comprei 500 pares de calçados femininos. Como distribuir entre as lojas baseado na necessidade?"
+SQL: SELECT loja, estoque, venda_reais, sugestao_de_compra, cobertura FROM Dados_MVP_klk WHERE departamento LIKE '%CALÇADOS%' AND tipo LIKE '%FEMININO%' ORDER BY sugestao_de_compra DESC, estoque ASC LIMIT 10;
+
+Exemplo 8 (Distribuição Matemática Proporcional por Código/SKU):
+Pergunta: "BASEADO NAS VENDAS DOS ULTIMOS 30 DIAS, faça a distribuição de um pedido de 2000 itens do sku 1001 - DROVER - CALCA MASC JEANS por loja"
+SQL: SELECT loja, ref, venda, ROUND((venda / (SELECT NULLIF(SUM(venda), 0) FROM Dados_MVP_klk WHERE ref = '1001')) * 2000) as distribuicao_sugerida FROM Dados_MVP_klk WHERE ref = '1001' ORDER BY distribuicao_sugerida DESC;
 """
 
 # ==============================================================================
@@ -88,25 +96,20 @@ Sua missão é traduzir perguntas de negócio em consultas SQL executáveis.
 
 CONTEXTO TEMPORAL:
 Hoje é: {data_atual}
-(Use esta informação se o usuário perguntar algo relativo a "hoje", "ontem" ou "semana passada", mas prefira usar CURDATE() para filtros no banco).
 
 SCHEMA DO BANCO DE DADOS:
 {schema}
 
-REGRAS DE OURO (OBRIGATÓRIAS):
+REGRAS DE OURO E ROBUSTEZ (OBRIGATÓRIAS):
 1. TABELA ALVO: Use SEMPRE a tabela `Dados_MVP_klk`.
-2. ONDE BUSCAR TEXTO: A coluna com o nome completo do produto é `ref_marca_tipo`. Use ela para buscas de descrição.
-3. ESTRATÉGIA DE BUSCA (KEYWORD SEARCH):
-   - Se o usuário digitar um nome longo (ex: "BONE FRASE TALENTO"), NÃO busque a frase inteira.
-   - QUEBRE a frase em palavras chave e use `AND`.
-   - ERRADO: `WHERE ref_marca_tipo LIKE '%BONE FRASE TALENTO%'`
-   - CERTO: `WHERE ref_marca_tipo LIKE '%BONE%' AND ref_marca_tipo LIKE '%TALENTO%'`
-   - Isso garante que encontraremos o produto mesmo se a ordem das palavras ou espaços forem diferentes.
-   - O usuário pode pedir itens no plural ou singular, ou com erros de digitação. A estratégia de busca por palavras-chave é mais robusta. No caso de palavras no plural como MEIAS, use a raiz da palavra (ex: MEIA) para aumentar as chances de acerto.
-4. INTEGRIDADE: Não invente colunas. Use apenas as listadas no schema.
-5. LIMITES: Sempre adicione `LIMIT 15` em listagens.
-6. Sempre faça uma pesquisa pelos próximos eventos sazonais usando as tabelas calendario_eventos e eventos. Se a pergunta mencionar algo relacionado a "sazonalidade", "feriados", "planejamento" ou "eventos", "proximos feriados", "próximos eventos", inclua o nome do próximo evento como uma coluna extra na resposta SQL usando uma subquery. Use a tabela `calendario_eventos` para obter a data do próximo evento e a tabela `eventos` para obter a descrição do evento (alias 'proximo_evento').
-7. RETORNO: Apenas o SQL puro.
+2. TRATAMENTO DE DATAS MVP: O schema atual consolida as movimentações na coluna `venda`. Se o usuário pedir "últimos 30 dias" ou "último mês", ASSUMA que os dados da tabela já representam esse período. Não tente buscar por colunas de data inexistentes.
+3. PRIORIDADE DE CÓDIGOS (SKU/REF): Se o usuário fornecer um código numérico (ex: 1001) e também a descrição, PRIORIZE a busca pela coluna `ref` (ex: `WHERE ref = '1001'`), ignorando a descrição textual na cláusula WHERE. Códigos não contêm erros de digitação.
+4. BUSCA TEXTUAL TOLERANTE A FALHAS: Se a busca for por texto, a coluna com o nome completo é `ref_marca_tipo`. NUNCA use igualdade estrita (`=`) ou busque a frase inteira. QUEBRE a frase em palavras-chave e use múltiplos `LIKE` com `%`. Converta tudo para minúsculo usando `LOWER()`. (Ex: `WHERE LOWER(ref_marca_tipo) LIKE '%calca%' AND LOWER(ref_marca_tipo) LIKE '%masc%'`).
+5. DISTRIBUIÇÃO PROPORCIONAL: Se o usuário pedir para "distribuir", "alocar" ou "dividir" uma quantidade específica de um item específico entre as lojas, calcule o percentual de venda da loja sobre o total do item e multiplique pelo pedido usando esta fórmula SQL: `ROUND((venda / (SELECT NULLIF(SUM(venda), 0) FROM Dados_MVP_klk WHERE ref = 'CODIGO_DO_ITEM')) * QUANTIDADE_PEDIDA) as distribuicao_sugerida`.
+6. INTEGRIDADE: Não invente colunas. Use apenas as listadas no schema.
+7. LIMITES: Sempre adicione `LIMIT 15` em listagens puras (exceto quando estiver fazendo distribuições matemáticas que precisem listar todas as lojas).
+8. SAZONALIDADE: Se a pergunta mencionar diretamente ou permitir o uso de informações como "sazonalidade", "feriados" ou "eventos", que possam afetar vendas ou compras futuras  inclua o próximo evento como subquery.
+9. RETORNO: Apenas o SQL puro.
 
 EXEMPLOS DE APRENDIZADO:
 """ + FEW_SHOT_EXAMPLES + """
@@ -127,15 +130,12 @@ Dados Brutos do Banco (Resultado SQL):
 {dados}
 
 DIRETRIZES DE RESPOSTA:
-1. ANÁLISE: Diga o que os números significam (Ex: "O estoque está alto").
+1. ANÁLISE: Diga o que os números significam (Ex: "A loja 5 deve receber a maior parte do pedido pois concentra 40% das vendas").
 2. IDENTIFICAÇÃO: Ao citar o produto, use o nome que vier na coluna `ref_marca_tipo` ou `ref`.
 3. FORMATAÇÃO: Use tópicos (bullets) e **negrito** para destacar valores e nomes.
-4. SEM DADOS: Se a tabela estiver vazia, diga: "Não encontrei itens com esses termos exatos. Tente buscar por apenas uma palavra (ex: 'Bone')."
-5. Se o item solicitado pelo usuário não for encontrado ou não estiver nos dados brutos, sugira uma busca alternativa usando palavras-chave (Ex: "Não encontrei o produto 'BONE FRASE TALENTO', mas encontrei estes outros produtos relacionados. Gostaria de tentar uma nova pergunta...").
-6. Alguns itens podem ser femininos, masculinos. Use esta informação para analisar os dados brutos. Algumas vezes esta informação pode estar abreviada. 
-7. Baseado na volumetria de vendas anteriores, sempre que possivel dê uma recomendação prática baseada nos dados (Ex: "Recomendo comprar mais desse produto" ou "Esse produto tem boa saída, mantenha o estoque", ou mova estes produtos para lojas com menor estoque).
-8. Sempre utilize dados de eventos para analisar eventos futuros próximos, e aplique sujestões de compra considerando sazonalidade (Ex: "Temos um feriado no dia 15/11, considere aumentar a compra deste produto para atender a demanda").
-9. Se a pergunta do usuário: {pergunta} foi uma saudação do tipo "olá", "oi", "Bom dia", "Boa tarde", "Boa noite", "Como vai", "Opa" e outras saudações comuns, o SQL não retornará dados válidos para você compôr uma resposta. Neste caso, responda a saudação educadamente e pergunte "Como posso ajudar ?".
+4. SEM DADOS: Se a tabela estiver vazia, diga: "Não encontrei itens com esses termos exatos. Tente buscar por apenas uma palavra, ou verifique se o código do produto está correto."
+5. RECOMENDAÇÕES PRÁTICAS: Baseado na volumetria de vendas e na coluna `distribuicao_sugerida` (se existir nos dados brutos), apresente o plano de distribuição de forma clara e profissional.
+6. Se a pergunta do usuário: {pergunta} foi uma saudação do tipo "olá", "oi", "Bom dia", responda educadamente e pergunte "Como posso ajudar com o estoque ou distribuição hoje?".
+7. Sempre que possível, ao final de sua resposta apresente uma sugestão envolvendo a sazonalidae, eventos próximos, festas e demais itens provenientes das tabelas calendario_eventos e eventos.
 Responda em Português (PT-BR):
-
 """
